@@ -278,3 +278,267 @@ class TestKdfConfigOnUpgrade:
             assert db2.find_entries(title="Test", first=True) is not None
         finally:
             filepath.unlink(missing_ok=True)
+
+
+class TestKdfConfigChangesOnKdbx4:
+    """Tests for changing KDF settings on existing KDBX4 databases."""
+
+    def test_change_argon2_memory(self) -> None:
+        """Test changing Argon2 memory parameter on KDBX4 database."""
+        # Create database with fast config (16 MiB)
+        db = Database.create(
+            password="test",
+            kdf_config=Argon2Config.fast(),
+        )
+        db.root_group.create_entry(title="Test Entry")
+
+        with tempfile.NamedTemporaryFile(suffix=".kdbx", delete=False) as f:
+            filepath = Path(f.name)
+
+        try:
+            # Save with fast config
+            db.save(filepath=filepath)
+
+            # Reopen and verify KDF settings
+            db2 = Database.open(filepath, password="test")
+            assert db2._header is not None
+            assert db2._header.argon2_memory_kib == 16 * 1024  # 16 MiB
+
+            # Change to high security config (256 MiB)
+            db2.save(filepath=filepath, kdf_config=Argon2Config.high_security())
+
+            # Reopen and verify new KDF settings
+            db3 = Database.open(filepath, password="test")
+            assert db3._header is not None
+            assert db3._header.argon2_memory_kib == 256 * 1024  # 256 MiB
+            assert db3._header.argon2_iterations == 10
+            # Verify entry is still there
+            assert db3.find_entries(title="Test Entry", first=True) is not None
+        finally:
+            filepath.unlink(missing_ok=True)
+
+    def test_change_argon2_to_aes_kdf(self) -> None:
+        """Test switching from Argon2 to AES-KDF on KDBX4 database."""
+        # Create database with Argon2
+        db = Database.create(
+            password="test",
+            kdf_config=Argon2Config.fast(),
+        )
+        db.root_group.create_entry(title="Test Entry")
+
+        with tempfile.NamedTemporaryFile(suffix=".kdbx", delete=False) as f:
+            filepath = Path(f.name)
+
+        try:
+            # Save with Argon2
+            db.save(filepath=filepath)
+
+            # Reopen and verify it's Argon2
+            db2 = Database.open(filepath, password="test")
+            assert db2._header is not None
+            assert db2._header.kdf_type == KdfType.ARGON2D
+
+            # Switch to AES-KDF
+            db2.save(filepath=filepath, kdf_config=AesKdfConfig.fast())
+
+            # Reopen and verify it's now AES-KDF
+            db3 = Database.open(filepath, password="test")
+            assert db3._header is not None
+            assert db3._header.kdf_type == KdfType.AES_KDF
+            assert db3._header.aes_kdf_rounds == 60_000
+            # Argon2 fields should be None
+            assert db3._header.argon2_memory_kib is None
+            # Verify entry is still there
+            assert db3.find_entries(title="Test Entry", first=True) is not None
+        finally:
+            filepath.unlink(missing_ok=True)
+
+    def test_change_aes_kdf_to_argon2(self) -> None:
+        """Test switching from AES-KDF to Argon2 on KDBX4 database."""
+        # Create database with AES-KDF
+        db = Database.create(
+            password="test",
+            kdf_config=AesKdfConfig.fast(),
+        )
+        db.root_group.create_entry(title="Test Entry")
+
+        with tempfile.NamedTemporaryFile(suffix=".kdbx", delete=False) as f:
+            filepath = Path(f.name)
+
+        try:
+            # Save with AES-KDF
+            db.save(filepath=filepath)
+
+            # Reopen and verify it's AES-KDF
+            db2 = Database.open(filepath, password="test")
+            assert db2._header is not None
+            assert db2._header.kdf_type == KdfType.AES_KDF
+            assert db2._header.aes_kdf_rounds == 60_000
+
+            # Switch to Argon2
+            db2.save(filepath=filepath, kdf_config=Argon2Config.fast())
+
+            # Reopen and verify it's now Argon2
+            db3 = Database.open(filepath, password="test")
+            assert db3._header is not None
+            assert db3._header.kdf_type == KdfType.ARGON2D
+            assert db3._header.argon2_memory_kib == 16 * 1024  # 16 MiB
+            # AES-KDF fields should be None
+            assert db3._header.aes_kdf_rounds is None
+            # Verify entry is still there
+            assert db3.find_entries(title="Test Entry", first=True) is not None
+        finally:
+            filepath.unlink(missing_ok=True)
+
+    def test_change_argon2d_to_argon2id(self) -> None:
+        """Test switching from Argon2d to Argon2id variant."""
+        # Create database with Argon2d
+        db = Database.create(
+            password="test",
+            kdf_config=Argon2Config.fast(variant=KdfType.ARGON2D),
+        )
+        db.root_group.create_entry(title="Test Entry")
+
+        with tempfile.NamedTemporaryFile(suffix=".kdbx", delete=False) as f:
+            filepath = Path(f.name)
+
+        try:
+            # Save with Argon2d
+            db.save(filepath=filepath)
+
+            # Reopen and verify it's Argon2d
+            db2 = Database.open(filepath, password="test")
+            assert db2._header is not None
+            assert db2._header.kdf_type == KdfType.ARGON2D
+
+            # Switch to Argon2id
+            db2.save(
+                filepath=filepath,
+                kdf_config=Argon2Config.fast(variant=KdfType.ARGON2ID),
+            )
+
+            # Reopen and verify it's now Argon2id
+            db3 = Database.open(filepath, password="test")
+            assert db3._header is not None
+            assert db3._header.kdf_type == KdfType.ARGON2ID
+            assert db3._header.argon2_memory_kib == 16 * 1024  # 16 MiB
+            # Verify entry is still there
+            assert db3.find_entries(title="Test Entry", first=True) is not None
+        finally:
+            filepath.unlink(missing_ok=True)
+
+    def test_kdf_change_with_to_bytes(self) -> None:
+        """Test changing KDF settings using to_bytes()."""
+        # Create database with fast config
+        db = Database.create(
+            password="test",
+            kdf_config=Argon2Config.fast(),
+        )
+        db.root_group.create_entry(title="Test Entry")
+
+        # Save with high security config using to_bytes()
+        data = db.to_bytes(kdf_config=Argon2Config.high_security())
+
+        # Reopen from bytes and verify new KDF settings
+        db2 = Database.open_bytes(data, password="test")
+        assert db2._header is not None
+        assert db2._header.argon2_memory_kib == 256 * 1024  # 256 MiB
+        assert db2._header.argon2_iterations == 10
+        # Verify entry is still there
+        assert db2.find_entries(title="Test Entry", first=True) is not None
+
+    def test_kdf_change_preserves_data(self) -> None:
+        """Test that changing KDF preserves all database data."""
+        # Create database with multiple entries and groups
+        db = Database.create(
+            password="test",
+            kdf_config=Argon2Config.fast(),
+        )
+
+        # Add test data
+        group1 = db.root_group.create_subgroup(name="Group 1")
+        group2 = db.root_group.create_subgroup(name="Group 2")
+
+        entry1 = group1.create_entry(
+            title="Entry 1",
+            username="user1",
+            password="pass1",
+            url="https://example.com",
+        )
+        entry2 = group2.create_entry(
+            title="Entry 2",
+            username="user2",
+            password="pass2",
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".kdbx", delete=False) as f:
+            filepath = Path(f.name)
+
+        try:
+            # Save with fast config
+            db.save(filepath=filepath)
+
+            # Reopen and change to AES-KDF
+            db2 = Database.open(filepath, password="test")
+            db2.save(filepath=filepath, kdf_config=AesKdfConfig.standard())
+
+            # Reopen and verify all data is intact
+            db3 = Database.open(filepath, password="test")
+
+            # Verify KDF change
+            assert db3._header is not None
+            assert db3._header.kdf_type == KdfType.AES_KDF
+
+            # Verify groups
+            assert len(list(db3.root_group.subgroups)) == 3  # Including recycle bin
+
+            # Verify entries
+            e1 = db3.find_entries(title="Entry 1", first=True)
+            assert e1 is not None
+            assert e1.username == "user1"
+            assert e1.password == "pass1"
+            assert e1.url == "https://example.com"
+
+            e2 = db3.find_entries(title="Entry 2", first=True)
+            assert e2 is not None
+            assert e2.username == "user2"
+            assert e2.password == "pass2"
+        finally:
+            filepath.unlink(missing_ok=True)
+
+    def test_dump_kdf_cipher_settings(self) -> None:
+        """Test the dump_kdf_cipher_settings() helper method."""
+        # Create database with known settings
+        db = Database.create(
+            password="test",
+            kdf_config=Argon2Config.fast(),
+        )
+
+        # Get settings dump
+        settings_str = db.dump_kdf_cipher_settings()
+
+        # Verify it contains expected information
+        assert "KDBX4" in settings_str
+        assert "Cipher Settings:" in settings_str
+        assert "KDF Settings:" in settings_str
+        assert "ARGON2D" in settings_str
+        assert "Iterations: 3" in settings_str
+        assert "Memory: 16384 KiB (16.0 MiB)" in settings_str
+        assert "Parallelism: 2" in settings_str
+
+    def test_dump_kdf_cipher_settings_aes_kdf(self) -> None:
+        """Test dump_kdf_cipher_settings() with AES-KDF."""
+        # Create database with AES-KDF
+        db = Database.create(
+            password="test",
+            kdf_config=AesKdfConfig.standard(),
+        )
+
+        # Get settings dump
+        settings_str = db.dump_kdf_cipher_settings()
+
+        # Verify it contains expected information
+        assert "KDBX4" in settings_str
+        assert "KDF Settings:" in settings_str
+        assert "AES_KDF" in settings_str
+        assert "Rounds: 600,000" in settings_str
